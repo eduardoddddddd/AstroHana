@@ -172,3 +172,46 @@ SELECT
     MAX(ANIO)                           AS ANIO_MAX,
     ROUND(AVG(CAST(ANIO AS DOUBLE)),0)  AS ANIO_MEDIO
 FROM DBADMIN.CARTAS_NATALES;
+
+-- ── 11. TEXTOS KEPLER PARA CARTA NATAL (QUERY CORRECTA) ───────
+-- El Kepler 4 guarda signo y casa juntos en una entrada:
+--   "Sol en Libra O Casa 7" — signo Libra = entrada casa 7
+--   "Sol en Virgo O Casa 6" — para buscar textos de casa 6 hay que pedir Virgo
+--   "Luna en Piscis O Casa 12" — para casa 12 hay que pedir Piscis
+-- PLANETAS.REV contiene textos de Revolución Solar, no natales — excluir.
+--
+-- Eduardo: Sol Libra Casa 6 / Luna Tauro Casa 12 / ASC Géminis / Saturno Leo Casa 4
+
+SELECT
+    FICHERO,
+    CABECERA,
+    TEXTO
+FROM DBADMIN.KEPLER_TEXTOS
+WHERE
+    -- Sol en Libra (signo) — texto de signo Solar
+    (PLANETA1 = 'Sol'  AND SIGNO = 'Libra'  AND FICHERO != 'PLANETAS.REV')
+    OR
+    -- Sol en Casa 6 — el Kepler lo guarda como "Virgo o Casa 6"
+    (PLANETA1 = 'Sol'  AND CASA = 6         AND FICHERO != 'PLANETAS.REV')
+    OR
+    -- Luna en Tauro (signo)
+    (PLANETA1 = 'Luna' AND SIGNO = 'Tauro'  AND FICHERO != 'PLANETAS.REV')
+    OR
+    -- Luna en Casa 12 — el Kepler lo guarda como "Piscis o Casa 12"
+    (PLANETA1 = 'Luna' AND CASA = 12        AND FICHERO != 'PLANETAS.REV')
+ORDER BY PLANETA1 DESC, FICHERO, CASA;
+
+-- REGLA GENERAL para cualquier planeta/casa:
+-- Casa N → buscar el signo cuyo número ordinal es N
+--   Casa 1=Aries, 2=Tauro, 3=Géminis, 4=Cáncer, 5=Leo, 6=Virgo,
+--   7=Libra, 8=Escorpio, 9=Sagitario, 10=Capricornio, 11=Acuario, 12=Piscis
+-- Y FICHERO != 'PLANETAS.REV' para excluir Revolución Solar
+
+-- QUERY PARAMETRIZABLE para cualquier carta natal:
+-- Sustituye los pares (signo, casa_equivalente) según la tabla anterior
+SELECT FICHERO, CABECERA, TEXTO
+FROM DBADMIN.KEPLER_TEXTOS
+WHERE FICHERO NOT IN ('PLANETAS.REV', 'ASPECTOS.ASC')
+  AND PLANETA1 = :planeta   -- 'Sol', 'Luna', 'Mercurio'...
+  AND (SIGNO = :signo OR CASA = :casa_natural)
+ORDER BY FICHERO;
