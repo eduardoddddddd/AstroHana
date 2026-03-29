@@ -1,31 +1,15 @@
 """
-vecinos.py — Vecinos astrológicos en HANA
-==========================================
-Dado cualquier nacimiento, calcula posiciones con pyswisseph
-y devuelve los N famosos más similares entre 8.473 cartas natales.
-
-MODOS DE USO:
-  Interactivo:
-    py -X utf8 scripts/vecinos.py
-
-  Argumentos directos:
-    py -X utf8 scripts/vecinos.py 1976 10 11 20 33 1.0 40.4 -3.7
-    (año mes dia hora min gmt lat lon)
-
-  Con nombre de ciudad (requiere geopy):
-    py -X utf8 scripts/vecinos.py 1976 10 11 20 33 --ciudad Madrid
-
-DISTANCIA:
-  Por defecto usa 8 planetas personales (Sol, Luna, Merc, Venus,
-  Marte, Jupiter, Saturno, ASC). Usa --todos para los 12.
+vecinos.py — Vecinos astrológicos en HANA.
 """
+import argparse
+import os
+import textwrap
 
-import sys, os, argparse, textwrap
-from dotenv import load_dotenv
 import swisseph as swe
+from dotenv import load_dotenv
 from hdbcli import dbapi
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 HOST = os.getenv("HANA_HOST")
 PORT = int(os.getenv("HANA_PORT", 443))
@@ -33,45 +17,69 @@ USER = os.getenv("HANA_USER")
 PASS = os.getenv("HANA_PASS")
 EPHE = os.getenv("EPHE_PATH", r"C:\swisseph\ephe")
 
-SIGNOS = ["Aries","Tauro","Géminis","Cáncer","Leo","Virgo",
-          "Libra","Escorpio","Sagitario","Capricornio","Acuario","Piscis"]
-CASAS_NOM = ["","I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"]
+SIGNOS = [
+    "Aries", "Tauro", "Geminis", "Cancer", "Leo", "Virgo",
+    "Libra", "Escorpio", "Sagitario", "Capricornio", "Acuario", "Piscis",
+]
+CASAS_NOM = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"]
 
 PLANETAS_SW = {
-    "SOL": swe.SUN, "LUNA": swe.MOON, "MERCURIO": swe.MERCURY,
-    "VENUS": swe.VENUS, "MARTE": swe.MARS, "JUPITER": swe.JUPITER,
-    "SATURNO": swe.SATURN, "URANO": swe.URANUS,
-    "NEPTUNO": swe.NEPTUNE, "PLUTON": swe.PLUTO,
+    "SOL": swe.SUN,
+    "LUNA": swe.MOON,
+    "MERCURIO": swe.MERCURY,
+    "VENUS": swe.VENUS,
+    "MARTE": swe.MARS,
+    "JUPITER": swe.JUPITER,
+    "SATURNO": swe.SATURN,
+    "URANO": swe.URANUS,
+    "NEPTUNO": swe.NEPTUNE,
+    "PLUTON": swe.PLUTO,
 }
 
-# Planetas personales (excluyen los generacionales Urano/Neptuno/Plutón)
-FEATURES_8  = ["SOL_GR","LUNA_GR","MERCURIO_GR","VENUS_GR",
-                "MARTE_GR","JUPITER_GR","SATURNO_GR","ASC_GR"]
-FEATURES_12 = ["SOL_GR","LUNA_GR","MERCURIO_GR","VENUS_GR","MARTE_GR",
-                "JUPITER_GR","SATURNO_GR","URANO_GR","NEPTUNO_GR",
-                "PLUTON_GR","ASC_GR","MC_GR"]
+FEATURES_8 = [
+    "SOL_GR", "LUNA_GR", "MERCURIO_GR", "VENUS_GR",
+    "MARTE_GR", "JUPITER_GR", "SATURNO_GR", "ASC_GR",
+]
+FEATURES_12 = [
+    "SOL_GR", "LUNA_GR", "MERCURIO_GR", "VENUS_GR", "MARTE_GR",
+    "JUPITER_GR", "SATURNO_GR", "URANO_GR", "NEPTUNO_GR",
+    "PLUTON_GR", "ASC_GR", "MC_GR",
+]
 
-# ── Cálculo pyswisseph ────────────────────────────────────────
+
+def require_env(name: str, value: str | None) -> str:
+    if value:
+        return value
+    raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
+
+
+def ajustar_ut(dia: int, ut: float) -> tuple[int, float]:
+    dia_ut = dia
+    hora_ut = ut
+    if hora_ut < 0:
+        dia_ut -= 1
+        hora_ut += 24
+    if hora_ut >= 24:
+        dia_ut += 1
+        hora_ut -= 24
+    return dia_ut, hora_ut
+
 
 def calcular_carta(anio, mes, dia, hora, minuto, gmt, lat, lon):
-    """Calcula posiciones planetarias. Devuelve dict con grados absolutos."""
     swe.set_ephe_path(EPHE)
     ut = (hora + minuto / 60.0) - gmt
-    # Ajuste de día si UT desborda
-    dia_ut, hora_ut = dia, ut
-    if hora_ut < 0:   dia_ut -= 1; hora_ut += 24
-    if hora_ut >= 24: dia_ut += 1; hora_ut -= 24
+    dia_ut, hora_ut = ajustar_ut(dia, ut)
     jd = swe.julday(anio, mes, dia_ut, hora_ut)
 
     pos = {}
     for nombre, pid in PLANETAS_SW.items():
-        p, _ = swe.calc_ut(jd, pid, swe.FLG_SWIEPH)
-        pos[nombre] = round(p[0] % 360, 4)
+        planet_pos, _ = swe.calc_ut(jd, pid, swe.FLG_SWIEPH)
+        pos[nombre] = round(planet_pos[0] % 360, 4)
 
-    casas, ascmc = swe.houses(jd, lat, lon, b'P')   # Placidus
+    casas, ascmc = swe.houses(jd, lat, lon, b"P")
     pos["ASC"] = round(ascmc[0] % 360, 4)
-    pos["MC"]  = round(ascmc[1] % 360, 4)
-    pos["_jd"]    = jd
+    pos["MC"] = round(ascmc[1] % 360, 4)
+    pos["_jd"] = jd
     pos["_casas"] = casas
     return pos
 
@@ -79,74 +87,89 @@ def calcular_carta(anio, mes, dia, hora, minuto, gmt, lat, lon):
 def signo(grados):
     return SIGNOS[int(grados / 30)]
 
+
 def grado_en_signo(grados):
     g = grados % 30
-    return f"{int(g)}°{int((g%1)*60):02d}'"
+    return f"{int(g)}°{int((g % 1) * 60):02d}'"
+
 
 def casa_de(grados, casas):
-    """Devuelve número de casa (1-12) para unos grados dados."""
     lims = list(casas)
-    for i in range(12):
-        c1 = lims[i] % 360
-        c2 = lims[(i+1) % 12] % 360
+    for idx in range(12):
+        c1 = lims[idx] % 360
+        c2 = lims[(idx + 1) % 12] % 360
         if c2 < c1:
-            if grados >= c1 or grados < c2: return i + 1
+            if grados >= c1 or grados < c2:
+                return idx + 1
         else:
-            if c1 <= grados < c2: return i + 1
+            if c1 <= grados < c2:
+                return idx + 1
     return 1
 
 
 def imprimir_carta(pos):
-    """Muestra la carta calculada en formato legible."""
-    planetas_orden = ["SOL","LUNA","MERCURIO","VENUS","MARTE",
-                      "JUPITER","SATURNO","URANO","NEPTUNO","PLUTON"]
-    casas = pos.get("_casas", [0]*12)
+    planetas_orden = [
+        "SOL", "LUNA", "MERCURIO", "VENUS", "MARTE",
+        "JUPITER", "SATURNO", "URANO", "NEPTUNO", "PLUTON",
+    ]
+    casas = pos.get("_casas", [0] * 12)
     print()
     print("  Planeta      Signo         Grados    Casa")
-    print("  " + "─"*48)
-    for p in planetas_orden:
-        g = pos[p]
-        c = casa_de(g, casas)
-        print(f"  {p:10s}   {signo(g):12s}  {grado_en_signo(g):8s}  {CASAS_NOM[c]}")
+    print("  " + "-" * 48)
+    for planeta in planetas_orden:
+        grados = pos[planeta]
+        casa = casa_de(grados, casas)
+        print(f"  {planeta:10s}   {signo(grados):12s}  {grado_en_signo(grados):8s}  {CASAS_NOM[casa]}")
     print(f"  {'ASC':10s}   {signo(pos['ASC']):12s}  {grado_en_signo(pos['ASC']):8s}")
     print(f"  {'MC':10s}   {signo(pos['MC']):12s}  {grado_en_signo(pos['MC']):8s}")
     print()
 
-# ── Consulta HANA ─────────────────────────────────────────────
+
+def angular_distance_sql(column_name: str) -> str:
+    delta = f"ABS({column_name} - ?)"
+    return f"(CASE WHEN {delta} > 180 THEN 360 - {delta} ELSE {delta} END)"
+
 
 def conectar():
-    return dbapi.connect(address=HOST, port=PORT, user=USER, password=PASS,
-                         encrypt=True, sslValidateCertificate=False)
+    host = require_env("HANA_HOST", HOST)
+    user = require_env("HANA_USER", USER)
+    password = require_env("HANA_PASS", PASS)
+    return dbapi.connect(
+        address=host,
+        port=PORT,
+        user=user,
+        password=password,
+        encrypt=True,
+        sslValidateCertificate=False,
+    )
 
 
 def buscar_vecinos(pos, top=10, features=FEATURES_8):
-    """
-    Busca los N vecinos más cercanos en HANA.
-    Distancia euclidiana en el espacio de features indicado.
-    Devuelve lista de dicts.
-    """
-    # Mapeo feature → valor en pos
     mapa = {
-        "SOL_GR": pos["SOL"], "LUNA_GR": pos["LUNA"],
-        "MERCURIO_GR": pos["MERCURIO"], "VENUS_GR": pos["VENUS"],
-        "MARTE_GR": pos["MARTE"], "JUPITER_GR": pos["JUPITER"],
-        "SATURNO_GR": pos["SATURNO"], "URANO_GR": pos["URANO"],
-        "NEPTUNO_GR": pos["NEPTUNO"], "PLUTON_GR": pos["PLUTON"],
-        "ASC_GR": pos["ASC"], "MC_GR": pos["MC"],
+        "SOL_GR": pos["SOL"],
+        "LUNA_GR": pos["LUNA"],
+        "MERCURIO_GR": pos["MERCURIO"],
+        "VENUS_GR": pos["VENUS"],
+        "MARTE_GR": pos["MARTE"],
+        "JUPITER_GR": pos["JUPITER"],
+        "SATURNO_GR": pos["SATURNO"],
+        "URANO_GR": pos["URANO"],
+        "NEPTUNO_GR": pos["NEPTUNO"],
+        "PLUTON_GR": pos["PLUTON"],
+        "ASC_GR": pos["ASC"],
+        "MC_GR": pos["MC"],
     }
-    terminos = " + ".join(
-        f"POWER({col} - {mapa[col]}, 2)" for col in features
-    )
+    distance_terms = [f"POWER({angular_distance_sql(col)}, 2)" for col in features]
     sql = f"""
 SELECT TOP {top}
     NOMBRE,
-    SUBSTR(DESCRIPCION, 3, 60)      AS PERFIL,
+    SUBSTR(DESCRIPCION, 3, 60) AS PERFIL,
     ANIO,
     CLUSTER_ID,
-    ROUND(SOL_GR,  1)               AS SOL,
-    ROUND(LUNA_GR, 1)               AS LUNA,
-    ROUND(ASC_GR,  1)               AS ASC_,
-    ROUND(SQRT({terminos}), 2)      AS DISTANCIA
+    ROUND(SOL_GR, 1) AS SOL,
+    ROUND(LUNA_GR, 1) AS LUNA,
+    ROUND(ASC_GR, 1) AS ASC_,
+    ROUND(SQRT({' + '.join(distance_terms)}), 2) AS DISTANCIA
 FROM DBADMIN.CARTAS_NATALES
 WHERE CALC_ERROR = 0
   AND LENGTH(NOMBRE) > 4
@@ -155,29 +178,32 @@ WHERE CALC_ERROR = 0
   AND NOMBRE NOT LIKE '%MURDE%'
 ORDER BY DISTANCIA ASC
 """
+    params = []
+    for col in features:
+        params.extend([mapa[col], mapa[col], mapa[col]])
+
     conn = conectar()
-    cur  = conn.cursor()
-    cur.execute(sql)
-    cols = [d[0] for d in cur.description]
-    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    cur.close(); conn.close()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    cols = [desc[0] for desc in cur.description]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    cur.close()
+    conn.close()
     return rows
 
 
 def imprimir_vecinos(vecinos, features):
-    """Muestra la tabla de vecinos."""
-    nf = len(features)
-    print(f"  {'#':>2}  {'Nombre':<28}  {'Perfil':<35}  {'Año':>4}  {f'Dist({nf}p)':>10}")
-    print("  " + "─"*88)
-    for i, v in enumerate(vecinos, 1):
-        nombre = str(v["NOMBRE"])[:27]
-        perfil = str(v["PERFIL"] or "")[:34]
-        anio   = v["ANIO"] or "?"
-        dist   = v["DISTANCIA"]
-        print(f"  {i:>2}  {nombre:<28}  {perfil:<35}  {str(anio):>4}  {dist:>10.2f}")
+    n_features = len(features)
+    print(f"  {'#':>2}  {'Nombre':<28}  {'Perfil':<35}  {'Año':>4}  {f'Dist({n_features}p)':>10}")
+    print("  " + "-" * 88)
+    for idx, vecino in enumerate(vecinos, 1):
+        nombre = str(vecino["NOMBRE"])[:27]
+        perfil = str(vecino["PERFIL"] or "")[:34]
+        anio = vecino["ANIO"] or "?"
+        dist = vecino["DISTANCIA"]
+        print(f"  {idx:>2}  {nombre:<28}  {perfil:<35}  {str(anio):>4}  {dist:>10.2f}")
     print()
 
-# ── Modo interactivo ──────────────────────────────────────────
 
 def pedir_dato(texto, tipo=float, opciones=None):
     while True:
@@ -188,36 +214,36 @@ def pedir_dato(texto, tipo=float, opciones=None):
                 continue
             return val
         except ValueError:
-            print("  Valor inválido, intenta de nuevo.")
+            print("  Valor invalido, intenta de nuevo.")
 
 
 def modo_interactivo():
-    print("\n" + "═"*60)
-    print("  AstroHana — Vecinos natales en HANA")
+    print("\n" + "=" * 60)
+    print("  AstroHana - Vecinos natales en HANA")
     print("  8.473 cartas del Kepler 4 | pyswisseph | Placidus")
-    print("═"*60)
+    print("=" * 60)
     print("\n  Introduce los datos de nacimiento:\n")
 
-    anio   = pedir_dato("Año  (ej: 1976)", int)
-    mes    = pedir_dato("Mes  (1-12)",      int)
-    dia    = pedir_dato("Día  (1-31)",      int)
-    hora   = pedir_dato("Hora local (0-23)",int)
-    minuto = pedir_dato("Minutos (0-59)",   int)
-    gmt    = pedir_dato("GMT offset (ej: 1 para CET, -5 para EST)", float)
-    lat    = pedir_dato("Latitud  (ej: 40.4 para Madrid)",          float)
-    lon    = pedir_dato("Longitud (ej: -3.7 para Madrid)",          float)
+    anio = pedir_dato("Año  (ej: 1976)", int)
+    mes = pedir_dato("Mes  (1-12)", int)
+    dia = pedir_dato("Dia  (1-31)", int)
+    hora = pedir_dato("Hora local (0-23)", int)
+    minuto = pedir_dato("Minutos (0-59)", int)
+    gmt = pedir_dato("GMT offset (ej: 1 para CET, -5 para EST)", float)
+    lat = pedir_dato("Latitud  (ej: 40.4 para Madrid)", float)
+    lon = pedir_dato("Longitud (ej: -3.7 para Madrid)", float)
 
-    print("\n  ¿Cuántos vecinos? (por defecto 10)")
+    print("\n  ¿Cuantos vecinos? (por defecto 10)")
     try:
         top = int(input("  N: ").strip() or "10")
     except ValueError:
         top = 10
 
     print("\n  Modo distancia:")
-    print("    1 → 8 planetas personales (Sol, Luna, Merc, Venus, Marte, Jup, Sat, ASC)")
-    print("    2 → 12 planetas completos (incluye Urano, Neptuno, Plutón, MC)")
+    print("    1 -> 8 planetas personales (Sol, Luna, Merc, Venus, Marte, Jup, Sat, ASC)")
+    print("    2 -> 12 planetas completos (incluye Urano, Neptuno, Pluton, MC)")
     try:
-        modo = int(input("  Opción [1]: ").strip() or "1")
+        modo = int(input("  Opcion [1]: ").strip() or "1")
     except ValueError:
         modo = 1
 
@@ -225,60 +251,60 @@ def modo_interactivo():
     return anio, mes, dia, hora, minuto, gmt, lat, lon, top, features
 
 
-# ── Main ──────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Vecinos astrológicos en HANA",
+        description="Vecinos astrologicos en HANA",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent("""
-          Ejemplos:
-            py -X utf8 scripts/vecinos.py
-            py -X utf8 scripts/vecinos.py 1976 10 11 20 33 1.0 40.4 -3.7
-            py -X utf8 scripts/vecinos.py 1926 6 1 17 0 0 48.85 2.35 --top 15
-            py -X utf8 scripts/vecinos.py 1926 6 1 17 0 0 48.85 2.35 --todos
-        """))
-    parser.add_argument("args", nargs="*",
-        help="año mes dia hora min gmt lat lon (8 valores)")
-    parser.add_argument("--top",   type=int, default=10,
-        help="Número de vecinos (default: 10)")
-    parser.add_argument("--todos", action="store_true",
-        help="Usar 12 planetas en lugar de 8")
+        epilog=textwrap.dedent(
+            """
+            Ejemplos:
+              py -X utf8 scripts/vecinos.py
+              py -X utf8 scripts/vecinos.py 1976 10 11 20 33 1.0 40.4 -3.7
+              py -X utf8 scripts/vecinos.py 1926 6 1 17 0 0 48.85 2.35 --top 15
+              py -X utf8 scripts/vecinos.py 1926 6 1 17 0 0 48.85 2.35 --todos
+            """
+        ),
+    )
+    parser.add_argument("args", nargs="*", help="año mes dia hora min gmt lat lon (8 valores)")
+    parser.add_argument("--top", type=int, default=10, help="Numero de vecinos (default: 10)")
+    parser.add_argument("--todos", action="store_true", help="Usar 12 planetas en lugar de 8")
     cli = parser.parse_args()
 
     features = FEATURES_12 if cli.todos else FEATURES_8
 
     if len(cli.args) == 8:
-        anio, mes, dia, hora, minuto = [int(x)   for x in cli.args[:5]]
-        gmt, lat, lon               = [float(x) for x in cli.args[5:]]
+        anio, mes, dia, hora, minuto = [int(x) for x in cli.args[:5]]
+        gmt, lat, lon = [float(x) for x in cli.args[5:]]
         top = cli.top
     else:
         anio, mes, dia, hora, minuto, gmt, lat, lon, top, features = modo_interactivo()
 
-    # ── Calcular carta ────────────────────────────────────────
-    print(f"\n  Calculando carta natal: {dia:02d}/{mes:02d}/{anio}  "
-          f"{hora:02d}:{minuto:02d}h  GMT{gmt:+.1f}  "
-          f"({lat:.2f}°N, {lon:.2f}°E)")
+    lon_label = "E" if lon >= 0 else "W"
+    print(
+        f"\n  Calculando carta natal: {dia:02d}/{mes:02d}/{anio}  "
+        f"{hora:02d}:{minuto:02d}h  GMT{gmt:+.1f}  "
+        f"({lat:.2f}°N, {abs(lon):.2f}°{lon_label})"
+    )
     pos = calcular_carta(anio, mes, dia, hora, minuto, gmt, lat, lon)
     imprimir_carta(pos)
 
-    # ── Buscar vecinos ────────────────────────────────────────
-    nf = len(features)
-    print(f"  Buscando {top} vecinos más cercanos en HANA "
-          f"({nf} planetas, distancia euclidiana)...\n")
+    n_features = len(features)
+    print(
+        f"  Buscando {top} vecinos mas cercanos en HANA "
+        f"({n_features} planetas, distancia circular)...\n"
+    )
     vecinos = buscar_vecinos(pos, top=top, features=features)
 
     if not vecinos:
-        print("  Sin resultados. Verifica la conexión a HANA.")
+        print("  Sin resultados. Verifica la conexion a HANA.")
         return
 
     imprimir_vecinos(vecinos, features)
 
-    # ── Resumen del primero ───────────────────────────────────
-    v1 = vecinos[0]
-    print(f"  Vecino más cercano: {v1['NOMBRE']} ({v1['ANIO']})")
-    print(f"    Sol {signo(v1['SOL'])} · Luna {signo(v1['LUNA'])} · ASC {signo(v1['ASC_'])}")
-    print(f"    Distancia: {v1['DISTANCIA']:.2f}°  |  Cluster: {v1['CLUSTER_ID']}")
+    primero = vecinos[0]
+    print(f"  Vecino mas cercano: {primero['NOMBRE']} ({primero['ANIO']})")
+    print(f"    Sol {signo(primero['SOL'])} · Luna {signo(primero['LUNA'])} · ASC {signo(primero['ASC_'])}")
+    print(f"    Distancia: {primero['DISTANCIA']:.2f}°  |  Cluster: {primero['CLUSTER_ID']}")
     print()
 
 

@@ -1,32 +1,73 @@
+import os
+
+from dotenv import load_dotenv
 from hdbcli import dbapi
 
-HOST = "20178d0a-d4af-4825-bba6-11a2aa151d20.hna1.prod-us10.hanacloud.ondemand.com"
-PORT = 443
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-gh = dbapi.connect(address=HOST, port=PORT, user="GRANTHELPER",
-                   password="Temp4Grant!", encrypt=True, sslValidateCertificate=False)
-cur = gh.cursor()
+HOST = os.getenv("HANA_HOST")
+PORT = int(os.getenv("HANA_PORT", 443))
+DBADMIN_USER = os.getenv("HANA_USER", "DBADMIN")
+DBADMIN_PASS = os.getenv("HANA_PASS")
+GRANTHELPER_USER = os.getenv("HANA_GRANTHELPER_USER", "GRANTHELPER")
+GRANTHELPER_PASS = os.getenv("HANA_GRANTHELPER_PASS")
 
-try: cur.execute("DROP PROCEDURE DBADMIN.DO_KMEANS"); gh.commit()
-except: pass
 
-# Tablas de resultado con todas las columnas que PAL devuelve
-db = dbapi.connect(address=HOST, port=PORT, user="DBADMIN",
-                   password="Edu01edu.", encrypt=True, sslValidateCertificate=False)
-dbc = db.cursor()
-for t in ["PAL_KMEANS_RESULT","PAL_KMEANS_CENTROIDS"]:
-    try: dbc.execute(f"DROP TABLE DBADMIN.{t}"); db.commit()
-    except: pass
-dbc.execute("""CREATE COLUMN TABLE DBADMIN.PAL_KMEANS_RESULT (
-    ID INTEGER, CLUSTER_ID INTEGER, DISTANCE DOUBLE, SLIGHT_SILHOUETTE DOUBLE)""")
-dbc.execute("""CREATE COLUMN TABLE DBADMIN.PAL_KMEANS_CENTROIDS (
-    CLUSTER_ID INTEGER, ATTR_NAME NVARCHAR(256), VALUE DOUBLE)""")
-db.commit()
-print("Tablas resultado recreadas con schema correcto")
-db.close()
+def require_env(name: str, value: str | None) -> str:
+    if value:
+        return value
+    raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
 
-# Procedure con INSERT usando las 4 columnas reales de result
-proc_sql = """CREATE PROCEDURE DBADMIN.DO_KMEANS()
+
+def main():
+    host = require_env("HANA_HOST", HOST)
+    dbadmin_pass = require_env("HANA_PASS", DBADMIN_PASS)
+    granthelper_pass = require_env("HANA_GRANTHELPER_PASS", GRANTHELPER_PASS)
+
+    gh = dbapi.connect(
+        address=host,
+        port=PORT,
+        user=GRANTHELPER_USER,
+        password=granthelper_pass,
+        encrypt=True,
+        sslValidateCertificate=False,
+    )
+    cur = gh.cursor()
+
+    try:
+        cur.execute("DROP PROCEDURE DBADMIN.DO_KMEANS")
+        gh.commit()
+    except Exception:
+        pass
+
+    db = dbapi.connect(
+        address=host,
+        port=PORT,
+        user=DBADMIN_USER,
+        password=dbadmin_pass,
+        encrypt=True,
+        sslValidateCertificate=False,
+    )
+    dbc = db.cursor()
+    for table_name in ["PAL_KMEANS_RESULT", "PAL_KMEANS_CENTROIDS"]:
+        try:
+            dbc.execute(f"DROP TABLE DBADMIN.{table_name}")
+            db.commit()
+        except Exception:
+            pass
+    dbc.execute(
+        """CREATE COLUMN TABLE DBADMIN.PAL_KMEANS_RESULT (
+        ID INTEGER, CLUSTER_ID INTEGER, DISTANCE DOUBLE, SLIGHT_SILHOUETTE DOUBLE)"""
+    )
+    dbc.execute(
+        """CREATE COLUMN TABLE DBADMIN.PAL_KMEANS_CENTROIDS (
+        CLUSTER_ID INTEGER, ATTR_NAME NVARCHAR(256), VALUE DOUBLE)"""
+    )
+    db.commit()
+    print("Tablas resultado recreadas con schema correcto")
+    db.close()
+
+    proc_sql = """CREATE PROCEDURE DBADMIN.DO_KMEANS()
 LANGUAGE SQLSCRIPT
 SQL SECURITY DEFINER AS
 BEGIN
@@ -40,20 +81,24 @@ BEGIN
     INSERT INTO DBADMIN.PAL_KMEANS_CENTROIDS SELECT * FROM :lt_centers;
 END"""
 
-try:
-    cur.execute(proc_sql)
-    gh.commit()
-    print("Procedure DO_KMEANS creado OK")
-except Exception as e:
-    print(f"FAIL procedure: {e}")
+    try:
+        cur.execute(proc_sql)
+        gh.commit()
+        print("Procedure DO_KMEANS creado OK")
+    except Exception as exc:
+        print(f"FAIL procedure: {exc}")
+        gh.close()
+        raise SystemExit(1)
+
+    try:
+        cur.execute(f"GRANT EXECUTE ON DBADMIN.DO_KMEANS TO {DBADMIN_USER}")
+        gh.commit()
+        print("EXECUTE grant a DBADMIN OK")
+    except Exception as exc:
+        print(f"FAIL grant: {exc}")
+
     gh.close()
-    exit(1)
 
-try:
-    cur.execute("GRANT EXECUTE ON DBADMIN.DO_KMEANS TO DBADMIN")
-    gh.commit()
-    print("EXECUTE grant a DBADMIN OK")
-except Exception as e:
-    print(f"FAIL grant: {e}")
 
-gh.close()
+if __name__ == "__main__":
+    main()
